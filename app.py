@@ -5,11 +5,11 @@ import json
 
 st.set_page_config(page_title="Peta Garis Masa Denggi", layout="wide")
 
-st.title("🦟 Penjana Peta Interaktif Denggi")
+st.title("🦟 Penjana Peta Interaktif Denggi (Radius Geografi Tepat)")
 st.markdown("Muat naik fail data Excel mingguan anda untuk menjana peta animasi terkini.")
 
 # File uploader
-uploaded_file = st.file_uploader("Sila muat naik fail Excel (cth: HEAT MAP.xlsx)", type=['xlsx', 'xls'])
+uploaded_file = st.file_uploader("Sila muat naik fail Excel", type=['xlsx', 'xls'])
 
 if uploaded_file is not None:
     with st.spinner('Sedang memproses data...'):
@@ -23,11 +23,9 @@ if uploaded_file is not None:
             df['Lngitud (ISO)'] = pd.to_numeric(df['Lngitud (ISO)'], errors='coerce')
             df = df.dropna(subset=['Latitud (ISO)', 'Lngitud (ISO)'])
             
-            # Filter out coordinates that are clearly errors (outside Malaysia)
             df = df[(df['Latitud (ISO)'] >= 1.0) & (df['Latitud (ISO)'] <= 7.0)]
             df = df[(df['Lngitud (ISO)'] >= 99.0) & (df['Lngitud (ISO)'] <= 120.0)]
 
-            # Handle missing values
             df['Wabak Status'] = df['Wabak Status'].fillna('Tiada / Lain-lain')
             df['Status Kewarganegaraan'] = df['Status Kewarganegaraan'].fillna('Tidak dinyatakan')
             df['Lokaliti'] = df.get('Lokaliti (Alamat Semasa)', 'Tidak dinyatakan')
@@ -35,13 +33,11 @@ if uploaded_file is not None:
             df['Epid Daftar'] = df.get('Epid Minggu (Tkh Daftar)', 'Tidak dinyatakan').astype(str)
             df['Epid Onset'] = df.get('Epid Minggu (Tkh Onset)', 'Tidak dinyatakan').astype(str)
 
-            # Apply spatial jitter so overlapping cases spread out as distinct dots
             np.random.seed(42)
             jitter_amount = 0.0006 
             df['Lat_Jitter'] = df['Latitud (ISO)'] + np.random.uniform(-jitter_amount, jitter_amount, len(df))
             df['Lon_Jitter'] = df['Lngitud (ISO)'] + np.random.uniform(-jitter_amount, jitter_amount, len(df))
 
-            # Prepare Export Data
             export_df = df[['Latitud (ISO)', 'Lngitud (ISO)', 'Lat_Jitter', 'Lon_Jitter', 
                             'Lokaliti', 'Jenis Kes', 'Epid Daftar', 'Epid Onset', 
                             'Wabak Status', 'Status Kewarganegaraan', 'Pihak Pentadbir Lokaliti']].copy()
@@ -58,7 +54,6 @@ if uploaded_file is not None:
             def make_options(lst):
                 return "\n".join([f'<option value="{x}">{x}</option>' for x in lst])
 
-            # HTML TEMPLATE DENGAN SKALA RADIUS GEOGRAFI SEBENAR
             html_template = """
 <!DOCTYPE html>
 <html>
@@ -181,6 +176,9 @@ if uploaded_file is not None:
         slider.min = 0;
         slider.max = epidWeeks.length;
         slider.value = 0;
+        
+        const avgLat = rawData.length ? (rawData.reduce((a,b)=>a+b.lat,0)/rawData.length) : 3.13;
+        const avgLon = rawData.length ? (rawData.reduce((a,b)=>a+b.lon,0)/rawData.length) : 101.71;
 
         function onSliderInput() {
             const val = parseInt(slider.value, 10);
@@ -329,10 +327,6 @@ if uploaded_file is not None:
                 return true;
             });
 
-            // Auto-center coordinates based on available data
-            const mapCenterLat = rawData.length ? (rawData.reduce((sum, d) => sum + d.lat, 0) / rawData.length) : 3.13;
-            const mapCenterLon = rawData.length ? (rawData.reduce((sum, d) => sum + d.lon, 0) / rawData.length) : 101.71;
-
             const lats = filteredData.map(d => d.lat);
             const lons = filteredData.map(d => d.lon);
             const lats_j = filteredData.map(d => d.lat_j);
@@ -350,7 +344,7 @@ if uploaded_file is not None:
 
             const traces = [];
 
-            // Heatmap Trace
+            // 1. Heatmap Trace
             traces.push({
                 type: 'densitymapbox',
                 lat: lats, lon: lons, z: Array(lats.length).fill(1),
@@ -358,7 +352,7 @@ if uploaded_file is not None:
                 name: 'Heatmap', visible: visualMode === 'heatmap'
             });
 
-            // Individual Dots Trace
+            // 2. Individual Dots Trace
             let dotColor = mapStyle === 'carto-darkmatter' ? 'rgba(255, 255, 255, 0.8)' : 'rgba(20, 20, 20, 0.7)';
             let dotLine = mapStyle === 'carto-darkmatter' ? 'black' : 'white';
 
@@ -371,7 +365,7 @@ if uploaded_file is not None:
                 visible: visualMode !== 'heatmap'
             });
 
-            // Create True Geo-Scale Layers
+            // CREATE TRUE GEOGRAPHICAL MAPBOX LAYERS FOR RADII
             const layers = [];
             
             if (visualMode === 'dots_400' || visualMode === 'dots_both') {
@@ -413,7 +407,7 @@ if uploaded_file is not None:
                 transition: {duration: 500, easing: 'cubic-in-out'},
                 mapbox: {
                     style: mapStyle, 
-                    center: {lat: mapCenterLat, lon: mapCenterLon},
+                    center: {lat: avgLat, lon: avgLon},
                     zoom: 12.5,
                     layers: layers  // Adding the True Geo-Scale Layers here
                 },
@@ -436,14 +430,15 @@ if uploaded_file is not None:
 </html>
 """
 
-            # Combine Python logic with HTML Template
             html_content = html_template.replace('__PELAKSANA__', make_options(pelaksana_list))
             html_content = html_content.replace('__WABAK__', make_options(wabak_list))
             html_content = html_content.replace('__WARGA__', make_options(warga_list))
             html_content = html_content.replace('__EPID__', make_options(epid_list))
-            html_content = html_content.replace('__DATA__', json.dumps(data_json))
+            
+            # Using custom escape for JSON to prevent script injection issues
+            html_content = html_content.replace('__DATA__', json.dumps(data_json).replace('</', '<\\/'))
 
-            st.success("✅ Selesai diproses! Muat turun peta anda di bawah, atau pra-lihat di sini.")
+            st.success("✅ Selesai diproses! Peta anda sedia untuk dilihat dan dimuat turun.")
             
             st.download_button(
                 label="📥 Muat Turun Peta Anda (Format HTML)",
@@ -452,7 +447,6 @@ if uploaded_file is not None:
                 mime="text/html"
             )
 
-            # Tunjukkan preview map dalam app Streamlit
             st.components.v1.html(html_content, height=750, scrolling=True)
 
         except Exception as e:
