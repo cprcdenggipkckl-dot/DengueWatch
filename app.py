@@ -36,7 +36,7 @@ if uploaded_file is not None:
             df['Epid Daftar'] = df.get('Epid Minggu (Tkh Daftar)', 'Tidak dinyatakan').astype(str)
             df['Epid Onset'] = df.get('Epid Minggu (Tkh Onset)', 'Tidak dinyatakan').astype(str)
 
-            # Apply spatial jitter so overlapping cases spread out as distinct dots
+            # Apply spatial jitter
             np.random.seed(42)
             jitter_amount = 0.0006 
             df['Lat_Jitter'] = df['Latitud (ISO)'] + np.random.uniform(-jitter_amount, jitter_amount, len(df))
@@ -67,31 +67,20 @@ if uploaded_file is not None:
     <style>
         body { font-family: Arial, sans-serif; margin: 0; padding: 0; display: flex; height: 100vh; overflow: hidden; }
         #sidebar { width: 320px; padding: 20px; background-color: #f8f9fa; border-right: 1px solid #dee2e6; overflow-y: auto; box-sizing: border-box; }
-        #map-container { flex-grow: 1; position: relative; }
+        #map-container { flex-grow: 1; position: relative; background: #eef2f5; }
         #map { width: 100%; height: 100%; }
         .control-group { margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #e9ecef; }
         label { display: block; font-weight: bold; margin-bottom: 5px; font-size: 13px; }
+        .inline-label { display: inline-block; font-weight: normal; margin-left: 5px; cursor: pointer; }
         select { width: 100%; padding: 5px; font-size: 13px; box-sizing: border-box; }
         select[multiple] { height: 100px; }
         .help-text { font-size: 11px; color: #6c757d; margin-top: 5px; line-height: 1.4; }
         h3 { margin-top: 0; font-size: 18px; border-bottom: 2px solid #ccc; padding-bottom: 5px; }
         .slider-container { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
-        #play-btn { padding: 5px 10px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 3px; font-size: 12px; font-weight: bold; }
+        #play-btn { padding: 5px 10px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 3px; font-size: 12px; font-weight: bold; width: 65px; text-align: center; }
         #play-btn:hover { background: #0056b3; }
         #slider-val { width: 45px; text-align: center; font-weight: bold; font-size: 13px; background: #e9ecef; border-radius: 3px; padding: 3px; }
-        
-        /* Smooth blur transition overlay */
-        #map-overlay { 
-            position: absolute; 
-            top: 0; left: 0; width: 100%; height: 100%; 
-            background: rgba(255, 255, 255, 0.1); 
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
-            pointer-events: none; 
-            opacity: 0; 
-            transition: opacity 0.45s ease-in-out; 
-            z-index: 10; 
-        }
+        .loop-container { margin-top: 8px; font-size: 12px; display: flex; align-items: center; }
     </style>
 </head>
 <body>
@@ -104,11 +93,11 @@ if uploaded_file is not None:
                 <input type="range" id="epid-slider" min="0" max="100" value="0" style="flex-grow: 1;" oninput="onSliderInput()">
                 <span id="slider-val">Semua</span>
             </div>
-            <div style="margin-top: 8px;">
-                <input type="checkbox" id="loop-cb" checked>
-                <label for="loop-cb" style="display:inline; font-weight:normal; font-size:12px; cursor:pointer;">Mainkan Berterusan (Loop)</label>
+            <div class="loop-container">
+                <input type="checkbox" id="loop-toggle">
+                <label for="loop-toggle" class="inline-label">🔁 Loop Berterusan</label>
             </div>
-            <div class="help-text">Gunakan slider untuk melihat pergerakan kes.</div>
+            <div class="help-text">Gunakan slider untuk melihat pergerakan kes. Nilai <b>0</b> bermaksud kembali ke "Semua/Pelbagai" pilihan.</div>
         </div>
         <div class="control-group">
             <label>Jenis Peta (Basemap)</label>
@@ -159,7 +148,6 @@ if uploaded_file is not None:
     </div>
     <div id="map-container">
         <div id="map"></div>
-        <div id="map-overlay"></div>
     </div>
 
     <script>
@@ -190,7 +178,7 @@ if uploaded_file is not None:
                 sliderValDisplay.innerText = "M" + week;
                 for(let i=0; i<epidSelect.options.length; i++) epidSelect.options[i].selected = (epidSelect.options[i].value === week);
             }
-            updateMapWithFade();
+            updateMap(); 
         }
 
         function onEpidDropdownChange() {
@@ -206,30 +194,32 @@ if uploaded_file is not None:
                 sliderValDisplay.innerText = "Semua";
                 if (timer) { clearInterval(timer); timer = null; document.getElementById('play-btn').innerText = "▶ Play"; }
             }
-            updateMapWithFade();
+            updateMap();
         }
 
         function togglePlay() {
             const btn = document.getElementById('play-btn');
+            const loopEnabled = document.getElementById('loop-toggle').checked;
+            
             if (timer) {
-                clearInterval(timer); timer = null; btn.innerText = "▶ Play";
+                clearInterval(timer); 
+                timer = null; 
+                btn.innerText = "▶ Play";
             } else {
                 btn.innerText = "⏸ Pause";
-                if (parseInt(slider.value, 10) >= parseInt(slider.max, 10) || parseInt(slider.value, 10) === 0) slider.value = 1;
+                if (parseInt(slider.value, 10) === parseInt(slider.max, 10) || parseInt(slider.value, 10) === 0) {
+                    slider.value = 1;
+                }
                 onSliderInput();
                 
                 timer = setInterval(() => {
                     let v = parseInt(slider.value, 10);
-                    let maxV = parseInt(slider.max, 10);
-                    
-                    if (v < maxV) { 
+                    if (v < parseInt(slider.max, 10)) { 
                         slider.value = v + 1; 
                         onSliderInput(); 
-                    } 
-                    else { 
-                        const isLoop = document.getElementById('loop-cb').checked;
-                        if (isLoop) {
-                            slider.value = 1; // Loop back to start
+                    } else {
+                        if (document.getElementById('loop-toggle').checked) {
+                            slider.value = 1; // Restart seamlessly
                             onSliderInput();
                         } else {
                             clearInterval(timer); 
@@ -237,7 +227,7 @@ if uploaded_file is not None:
                             btn.innerText = "▶ Play"; 
                         }
                     }
-                }, 1600); // 1.6 seconds gives the perfect amount of time for the 0.45s blur fade in/out to breathe
+                }, 1000); 
             }
         }
 
@@ -248,22 +238,6 @@ if uploaded_file is not None:
                 if (select.options[i].selected) values.push(select.options[i].value);
             }
             return values;
-        }
-
-        function updateMapWithFade() {
-            if (!mapInitialized) { updateMap(); return; }
-            const overlay = document.getElementById('map-overlay');
-            const mapStyle = document.getElementById('map-style').value;
-            
-            // Subtle color tint along with the blur
-            overlay.style.background = (mapStyle === 'carto-darkmatter') ? 'rgba(20, 20, 20, 0.3)' : 'rgba(255, 255, 255, 0.3)';
-            overlay.style.opacity = 1;
-            
-            setTimeout(() => {
-                updateMap();
-                // Wait briefly for Plotly render engine to catch up before lifting the blur
-                setTimeout(() => { overlay.style.opacity = 0; }, 150);
-            }, 450); // Matches the CSS transition time
         }
 
         function createGeoJsonCircles(data, radiusInMeters) {
