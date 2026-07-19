@@ -68,7 +68,7 @@ if uploaded_file is not None:
         body { font-family: Arial, sans-serif; margin: 0; padding: 0; display: flex; height: 100vh; overflow: hidden; }
         #sidebar { width: 320px; padding: 20px; background-color: #f8f9fa; border-right: 1px solid #dee2e6; overflow-y: auto; box-sizing: border-box; }
         #map-container { flex-grow: 1; position: relative; }
-        #map { width: 100%; height: 100%; transition: opacity 0.4s ease-in-out; }
+        #map { width: 100%; height: 100%; }
         .control-group { margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #e9ecef; }
         label { display: block; font-weight: bold; margin-bottom: 5px; font-size: 13px; }
         select { width: 100%; padding: 5px; font-size: 13px; box-sizing: border-box; }
@@ -79,7 +79,19 @@ if uploaded_file is not None:
         #play-btn { padding: 5px 10px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 3px; font-size: 12px; font-weight: bold; }
         #play-btn:hover { background: #0056b3; }
         #slider-val { width: 45px; text-align: center; font-weight: bold; font-size: 13px; background: #e9ecef; border-radius: 3px; padding: 3px; }
-        #map-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255, 255, 255, 0.4); pointer-events: none; opacity: 0; transition: opacity 0.3s ease-in-out; z-index: 10; }
+        
+        /* Smooth blur transition overlay */
+        #map-overlay { 
+            position: absolute; 
+            top: 0; left: 0; width: 100%; height: 100%; 
+            background: rgba(255, 255, 255, 0.1); 
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            pointer-events: none; 
+            opacity: 0; 
+            transition: opacity 0.45s ease-in-out; 
+            z-index: 10; 
+        }
     </style>
 </head>
 <body>
@@ -91,6 +103,10 @@ if uploaded_file is not None:
                 <button id="play-btn" onclick="togglePlay()">▶ Play</button>
                 <input type="range" id="epid-slider" min="0" max="100" value="0" style="flex-grow: 1;" oninput="onSliderInput()">
                 <span id="slider-val">Semua</span>
+            </div>
+            <div style="margin-top: 8px;">
+                <input type="checkbox" id="loop-cb" checked>
+                <label for="loop-cb" style="display:inline; font-weight:normal; font-size:12px; cursor:pointer;">Mainkan Berterusan (Loop)</label>
             </div>
             <div class="help-text">Gunakan slider untuk melihat pergerakan kes.</div>
         </div>
@@ -199,13 +215,29 @@ if uploaded_file is not None:
                 clearInterval(timer); timer = null; btn.innerText = "▶ Play";
             } else {
                 btn.innerText = "⏸ Pause";
-                if (parseInt(slider.value, 10) === parseInt(slider.max, 10) || parseInt(slider.value, 10) === 0) slider.value = 1;
+                if (parseInt(slider.value, 10) >= parseInt(slider.max, 10) || parseInt(slider.value, 10) === 0) slider.value = 1;
                 onSliderInput();
+                
                 timer = setInterval(() => {
                     let v = parseInt(slider.value, 10);
-                    if (v < parseInt(slider.max, 10)) { slider.value = v + 1; onSliderInput(); } 
-                    else { clearInterval(timer); timer = null; btn.innerText = "▶ Play"; }
-                }, 1200); 
+                    let maxV = parseInt(slider.max, 10);
+                    
+                    if (v < maxV) { 
+                        slider.value = v + 1; 
+                        onSliderInput(); 
+                    } 
+                    else { 
+                        const isLoop = document.getElementById('loop-cb').checked;
+                        if (isLoop) {
+                            slider.value = 1; // Loop back to start
+                            onSliderInput();
+                        } else {
+                            clearInterval(timer); 
+                            timer = null; 
+                            btn.innerText = "▶ Play"; 
+                        }
+                    }
+                }, 1600); // 1.6 seconds gives the perfect amount of time for the 0.45s blur fade in/out to breathe
             }
         }
 
@@ -222,12 +254,16 @@ if uploaded_file is not None:
             if (!mapInitialized) { updateMap(); return; }
             const overlay = document.getElementById('map-overlay');
             const mapStyle = document.getElementById('map-style').value;
-            overlay.style.background = (mapStyle === 'carto-darkmatter') ? 'rgba(20, 20, 20, 0.5)' : 'rgba(255, 255, 255, 0.5)';
+            
+            // Subtle color tint along with the blur
+            overlay.style.background = (mapStyle === 'carto-darkmatter') ? 'rgba(20, 20, 20, 0.3)' : 'rgba(255, 255, 255, 0.3)';
             overlay.style.opacity = 1;
+            
             setTimeout(() => {
                 updateMap();
-                setTimeout(() => { overlay.style.opacity = 0; }, 100);
-            }, 250);
+                // Wait briefly for Plotly render engine to catch up before lifting the blur
+                setTimeout(() => { overlay.style.opacity = 0; }, 150);
+            }, 450); // Matches the CSS transition time
         }
 
         function createGeoJsonCircles(data, radiusInMeters) {
@@ -298,7 +334,7 @@ if uploaded_file is not None:
                 layers.push({ sourcetype: 'geojson', source: createGeoJsonCircles(filteredData, 200), type: 'line', color: 'rgba(255, 69, 0, 0.8)', line: {width: 1} });
             }
 
-            const layout = { title: titleText, transition: {duration: 500, easing: 'cubic-in-out'}, mapbox: { style: mapStyle, center: {lat: avgLat, lon: avgLon}, zoom: 12.5, layers: layers }, margin: {r: 0, t: 40, l: 0, b: 0}, showlegend: false, uirevision: 'true' };
+            const layout = { title: titleText, mapbox: { style: mapStyle, center: {lat: avgLat, lon: avgLon}, zoom: 12.5, layers: layers }, margin: {r: 0, t: 40, l: 0, b: 0}, showlegend: false, uirevision: 'true' };
 
             if (!mapInitialized) { Plotly.newPlot('map', traces, layout); mapInitialized = true; } 
             else { Plotly.react('map', traces, layout); }
