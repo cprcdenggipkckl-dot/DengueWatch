@@ -1,28 +1,378 @@
-if col_blok != "Tiada" and col_tingkat != "Tiada":
+import streamlit as st
+import pandas as pd
+import numpy as np
+import json
+import io
+
+st.set_page_config(page_title="Peta Garis Masa Denggi", layout="wide")
+
+st.title("🦟 Penjana Peta Interaktif Denggi")
+st.markdown("Muat naik fail data Excel mingguan anda untuk menjana peta animasi terkini.")
+
+# File uploader
+uploaded_file = st.file_uploader("Sila muat naik fail Excel (cth: HEAT MAP.xlsx)", type=['xlsx', 'xls'])
+
+if uploaded_file is not None:
+    with st.spinner('Sedang memproses data...'):
+        try:
+            # Read Data
+            xls = pd.ExcelFile(uploaded_file)
+            df = pd.read_excel(uploaded_file, sheet_name=xls.sheet_names[0])
+
+            # Clean Data for Map
+            df['Latitud (ISO)'] = pd.to_numeric(df['Latitud (ISO)'], errors='coerce')
+            df['Lngitud (ISO)'] = pd.to_numeric(df['Lngitud (ISO)'], errors='coerce')
+            
+            # Create a map-specific dataframe dropping missing coords
+            df_map = df.dropna(subset=['Latitud (ISO)', 'Lngitud (ISO)']).copy()
+            df_map = df_map[(df_map['Latitud (ISO)'] >= 1.0) & (df_map['Latitud (ISO)'] <= 7.0)]
+            df_map = df_map[(df_map['Lngitud (ISO)'] >= 99.0) & (df_map['Lngitud (ISO)'] <= 120.0)]
+
+            # Handle missing values
+            df_map['Wabak Status'] = df_map['Wabak Status'].fillna('Tiada / Lain-lain')
+            df_map['Status Kewarganegaraan'] = df_map['Status Kewarganegaraan'].fillna('Tidak dinyatakan')
+            df_map['Lokaliti'] = df_map.get('Lokaliti (Alamat Semasa)', 'Tidak dinyatakan')
+            df_map['Jenis Kes'] = df_map.get('Jenis Kes', 'Tidak dinyatakan')
+            df_map['Epid Daftar'] = df_map.get('Epid Minggu (Tkh Daftar)', 'Tidak dinyatakan').astype(str)
+            df_map['Epid Onset'] = df_map.get('Epid Minggu (Tkh Onset)', 'Tidak dinyatakan').astype(str)
+
+            # Apply spatial jitter
+            np.random.seed(42)
+            jitter_amount = 0.0006 
+            df_map['Lat_Jitter'] = df_map['Latitud (ISO)'] + np.random.uniform(-jitter_amount, jitter_amount, len(df_map))
+            df_map['Lon_Jitter'] = df_map['Lngitud (ISO)'] + np.random.uniform(-jitter_amount, jitter_amount, len(df_map))
+
+            # Prepare Export Data
+            export_df = df_map[['Latitud (ISO)', 'Lngitud (ISO)', 'Lat_Jitter', 'Lon_Jitter', 
+                            'Lokaliti', 'Jenis Kes', 'Epid Daftar', 'Epid Onset', 
+                            'Wabak Status', 'Status Kewarganegaraan', 'Pihak Pentadbir Lokaliti']].copy()
+            export_df.columns = ['lat', 'lon', 'lat_j', 'lon_j', 'lokaliti', 'jenis', 'epid_daftar', 'epid_onset', 'wabak', 'warga', 'pelaksana']
+            export_df = export_df.fillna('N/A')
+            data_json = export_df.to_dict(orient='records')
+
+            pelaksana_list = sorted(export_df['pelaksana'].unique().tolist())
+            wabak_list = sorted(export_df['wabak'].unique().tolist())
+            warga_list = sorted(export_df['warga'].unique().tolist())
+            epid_list = sorted(export_df['epid_daftar'].unique().tolist(), key=lambda x: float(x) if x.replace('.','',1).isdigit() else 999)
+
+            def make_options(lst):
+                return "\n".join([f'<option value="{x}">{x}</option>' for x in lst])
+
+            # MAP HTML TEMPLATE
+            html_template = """<!DOCTYPE html>
+<html>
+<head>
+    <title>Dengue Timeline Map</title>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 0; display: flex; height: 100vh; overflow: hidden; }
+        #sidebar { width: 320px; padding: 20px; background-color: #f8f9fa; border-right: 1px solid #dee2e6; overflow-y: auto; box-sizing: border-box; }
+        #map-container { flex-grow: 1; position: relative; background: #eef2f5; }
+        #map { width: 100%; height: 100%; }
+        .control-group { margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #e9ecef; }
+        label { display: block; font-weight: bold; margin-bottom: 5px; font-size: 13px; }
+        .inline-label { display: inline-block; font-weight: normal; margin-left: 5px; cursor: pointer; }
+        select { width: 100%; padding: 5px; font-size: 13px; box-sizing: border-box; }
+        select[multiple] { height: 100px; }
+        .help-text { font-size: 11px; color: #6c757d; margin-top: 5px; line-height: 1.4; }
+        h3 { margin-top: 0; font-size: 18px; border-bottom: 2px solid #ccc; padding-bottom: 5px; }
+        .slider-container { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+        #play-btn { padding: 5px 10px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 3px; font-size: 12px; font-weight: bold; width: 65px; text-align: center; }
+        #play-btn:hover { background: #0056b3; }
+        #slider-val { width: 45px; text-align: center; font-weight: bold; font-size: 13px; background: #e9ecef; border-radius: 3px; padding: 3px; }
+        .loop-container { margin-top: 8px; font-size: 12px; display: flex; align-items: center; }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <h3>Filter & Visualisasi</h3>
+        <div class="control-group" style="background: #eef2f5; padding: 10px; border-radius: 5px; border: 1px solid #cdd4db;">
+            <label>Animasi / Timeline Epid</label>
+            <div class="slider-container">
+                <button id="play-btn" onclick="togglePlay()">▶ Play</button>
+                <input type="range" id="epid-slider" min="0" max="100" value="0" style="flex-grow: 1;" oninput="onSliderInput()">
+                <span id="slider-val">Semua</span>
+            </div>
+            <div class="loop-container">
+                <input type="checkbox" id="loop-toggle">
+                <label for="loop-toggle" class="inline-label">🔁 Loop Berterusan</label>
+            </div>
+            <div class="help-text">Gunakan slider untuk melihat pergerakan kes.</div>
+        </div>
+        <div class="control-group">
+            <label>Jenis Peta (Basemap)</label>
+            <select id="map-style" onchange="updateMap()">
+                <option value="carto-positron" selected>Carto Positron (Peta Cerah)</option>
+                <option value="open-street-map">OpenStreetMap (Terperinci)</option>
+                <option value="carto-darkmatter">Carto Darkmatter (Peta Gelap)</option>
+            </select>
+        </div>
+        <div class="control-group">
+            <label>Visual Mode</label>
+            <select id="visual-mode" onchange="updateMap()">
+                <option value="heatmap">Heat Map</option>
+                <option value="dots">Kes Individu (Dots sahaja)</option>
+                <option value="dots_200">Dots + 200m Radius Geografi (Tepat)</option>
+                <option value="dots_400">Dots + 400m Radius Geografi (Tepat)</option>
+                <option value="dots_both">Dots + 200m & 400m Radius (Tepat)</option>
+            </select>
+        </div>
+        <div class="control-group">
+            <label>Epid Minggu (Daftar)</label>
+            <select id="epid" multiple onchange="onEpidDropdownChange()">
+                <option value="Semua" selected>-- Semua Minggu --</option>
+                __EPID__
+            </select>
+        </div>
+        <div class="control-group">
+            <label>Pelaksana</label>
+            <select id="pelaksana" onchange="updateMap()">
+                <option value="Semua">Semua</option>
+                __PELAKSANA__
+            </select>
+        </div>
+        <div class="control-group">
+            <label>Wabak Status</label>
+            <select id="wabak" onchange="updateMap()">
+                <option value="Semua">Semua</option>
+                __WABAK__
+            </select>
+        </div>
+        <div class="control-group">
+            <label>Kewarganegaraan</label>
+            <select id="warga" onchange="updateMap()">
+                <option value="Semua">Semua</option>
+                __WARGA__
+            </select>
+        </div>
+    </div>
+    <div id="map-container">
+        <div id="map"></div>
+    </div>
+
+    <script>
+        const rawData = __DATA__;
+        let mapInitialized = false;
+        let timer = null;
+
+        const epidWeeksRaw = [...new Set(rawData.map(d => parseFloat(d.epid_daftar)))].filter(n => !isNaN(n)).sort((a, b) => a - b);
+        const epidWeeks = epidWeeksRaw.map(n => Math.floor(n) === n ? String(Math.floor(n)) : String(n));
+
+        const slider = document.getElementById('epid-slider');
+        const sliderValDisplay = document.getElementById('slider-val');
+        slider.min = 0;
+        slider.max = epidWeeks.length;
+        slider.value = 0;
+
+        const avgLat = rawData.length ? (rawData.reduce((a,b)=>a+b.lat,0)/rawData.length) : 3.13;
+        const avgLon = rawData.length ? (rawData.reduce((a,b)=>a+b.lon,0)/rawData.length) : 101.71;
+
+        function onSliderInput() {
+            const val = parseInt(slider.value, 10);
+            const epidSelect = document.getElementById('epid');
+            if (val === 0) {
+                sliderValDisplay.innerText = "Semua";
+                for(let i=0; i<epidSelect.options.length; i++) epidSelect.options[i].selected = (epidSelect.options[i].value === 'Semua');
+            } else {
+                const week = epidWeeks[val - 1];
+                sliderValDisplay.innerText = "M" + week;
+                for(let i=0; i<epidSelect.options.length; i++) epidSelect.options[i].selected = (epidSelect.options[i].value === week);
+            }
+            updateMap(); 
+        }
+
+        function onEpidDropdownChange() {
+            const selected = getSelectedValues('epid');
+            if (selected.length === 1 && selected[0] !== 'Semua') {
+                const idx = epidWeeks.indexOf(selected[0]);
+                if (idx !== -1) {
+                    slider.value = idx + 1;
+                    sliderValDisplay.innerText = "M" + selected[0];
+                }
+            } else {
+                slider.value = 0;
+                sliderValDisplay.innerText = "Semua";
+                if (timer) { clearInterval(timer); timer = null; document.getElementById('play-btn').innerText = "▶ Play"; }
+            }
+            updateMap();
+        }
+
+        function togglePlay() {
+            const btn = document.getElementById('play-btn');
+            const loopEnabled = document.getElementById('loop-toggle').checked;
+            
+            if (timer) {
+                clearInterval(timer); timer = null; btn.innerText = "▶ Play";
+            } else {
+                btn.innerText = "⏸ Pause";
+                if (parseInt(slider.value, 10) === parseInt(slider.max, 10) || parseInt(slider.value, 10) === 0) {
+                    slider.value = 1;
+                }
+                onSliderInput();
+                
+                timer = setInterval(() => {
+                    let v = parseInt(slider.value, 10);
+                    if (v < parseInt(slider.max, 10)) { 
+                        slider.value = v + 1; onSliderInput(); 
+                    } else {
+                        if (document.getElementById('loop-toggle').checked) {
+                            slider.value = 1; onSliderInput();
+                        } else {
+                            clearInterval(timer); timer = null; btn.innerText = "▶ Play"; 
+                        }
+                    }
+                }, 1000); 
+            }
+        }
+
+        function getSelectedValues(selectId) {
+            const select = document.getElementById(selectId);
+            const values = [];
+            for (let i = 0; i < select.options.length; i++) {
+                if (select.options[i].selected) values.push(select.options[i].value);
+            }
+            return values;
+        }
+
+        function createGeoJsonCircles(data, radiusInMeters) {
+            const features = data.map(d => {
+                const earthRadius = 6378137;
+                const points = 32;
+                const coords = [];
+                for (let i = 0; i <= points; i++) {
+                    const angle = (i * 360 / points) * (Math.PI / 180);
+                    const dLat = (radiusInMeters / earthRadius) * (180 / Math.PI);
+                    const dLon = (radiusInMeters / (earthRadius * Math.cos(Math.PI * d.lat / 180))) * (180 / Math.PI);
+                    coords.push([d.lon + dLon * Math.cos(angle), d.lat + dLat * Math.sin(angle)]);
+                }
+                return { type: "Feature", geometry: { type: "Polygon", coordinates: [coords] } };
+            });
+            return { type: "FeatureCollection", features: features };
+        }
+
+        function updateMap() {
+            const visualMode = document.getElementById('visual-mode').value;
+            const mapStyle = document.getElementById('map-style').value;
+            const pelaksana = document.getElementById('pelaksana').value;
+            const wabak = document.getElementById('wabak').value;
+            const warga = document.getElementById('warga').value;
+            
+            let activeEpids = null;
+            const sliderVal = parseInt(slider.value, 10);
+            let titleText = "Analisis Kelajuan & Ekspansi";
+
+            if (sliderVal === 0) {
+                activeEpids = getSelectedValues('epid');
+                if (activeEpids.includes('Semua') || activeEpids.length === 0) { activeEpids = null; titleText += " (Semua Minggu)"; } 
+                else { titleText += ` (Minggu: ${activeEpids.join(', ')})`; }
+            } else {
+                const week = epidWeeks[sliderVal - 1];
+                activeEpids = [ week ]; titleText += ` (Transisi: M${week})`;
+            }
+
+            const filteredData = rawData.filter(d => {
+                if (pelaksana !== 'Semua' && d.pelaksana !== pelaksana) return false;
+                if (wabak !== 'Semua' && d.wabak !== wabak) return false;
+                if (warga !== 'Semua' && d.warga !== warga) return false;
+                if (activeEpids !== null && !activeEpids.includes(d.epid_daftar)) return false;
+                return true;
+            });
+
+            const lats = filteredData.map(d => d.lat); const lons = filteredData.map(d => d.lon);
+            const lats_j = filteredData.map(d => d.lat_j); const lons_j = filteredData.map(d => d.lon_j);
+            const customdata = filteredData.map(d => [d.lokaliti, d.jenis, d.epid_daftar, d.wabak, d.warga, d.pelaksana]);
+            
+            const hovertemplate = "<b>Lokaliti:</b> %{customdata[0]}<br><b>Jenis Kes:</b> %{customdata[1]}<br><b>Epid Minggu:</b> %{customdata[2]}<br><b>Wabak Status:</b> %{customdata[3]}<br><b>Kewarganegaraan:</b> %{customdata[4]}<br><b>Pelaksana:</b> %{customdata[5]}<br><extra></extra>";
+
+            const traces = [];
+            traces.push({ type: 'densitymapbox', lat: lats, lon: lons, z: Array(lats.length).fill(1), radius: 18, customdata: customdata, hovertemplate: hovertemplate, name: 'Heatmap', visible: visualMode === 'heatmap' });
+            
+            let dotColor = mapStyle === 'carto-darkmatter' ? 'rgba(255, 255, 255, 0.8)' : 'rgba(20, 20, 20, 0.7)';
+            let dotLine = mapStyle === 'carto-darkmatter' ? 'black' : 'white';
+
+            traces.push({ type: 'scattermapbox', mode: 'markers', lat: lats_j, lon: lons_j, marker: { size: 8, color: dotColor, line: {color: dotLine, width: 1} }, customdata: customdata, hovertemplate: hovertemplate, name: 'Kes Individu', visible: visualMode !== 'heatmap' });
+
+            const layers = [];
+            if (visualMode === 'dots_400' || visualMode === 'dots_both') {
+                layers.push({ sourcetype: 'geojson', source: createGeoJsonCircles(filteredData, 400), type: 'fill', color: 'rgba(135, 206, 250, 0.15)' });
+                layers.push({ sourcetype: 'geojson', source: createGeoJsonCircles(filteredData, 400), type: 'line', color: 'rgba(135, 206, 250, 0.8)', line: {width: 1} });
+            }
+            if (visualMode === 'dots_200' || visualMode === 'dots_both') {
+                layers.push({ sourcetype: 'geojson', source: createGeoJsonCircles(filteredData, 200), type: 'fill', color: 'rgba(255, 69, 0, 0.2)' });
+                layers.push({ sourcetype: 'geojson', source: createGeoJsonCircles(filteredData, 200), type: 'line', color: 'rgba(255, 69, 0, 0.8)', line: {width: 1} });
+            }
+
+            const layout = { title: titleText, mapbox: { style: mapStyle, center: {lat: avgLat, lon: avgLon}, zoom: 12.5, layers: layers }, margin: {r: 0, t: 40, l: 0, b: 0}, showlegend: false, uirevision: 'true' };
+
+            if (!mapInitialized) { Plotly.newPlot('map', traces, layout); mapInitialized = true; } 
+            else { Plotly.react('map', traces, layout); }
+        }
+        updateMap();
+    </script>
+</body>
+</html>"""
+
+            # Inject Python Data into HTML
+            html_content = html_template.replace('__PELAKSANA__', make_options(pelaksana_list))
+            html_content = html_content.replace('__WABAK__', make_options(wabak_list))
+            html_content = html_content.replace('__WARGA__', make_options(warga_list))
+            html_content = html_content.replace('__EPID__', make_options(epid_list))
+            html_content = html_content.replace('__DATA__', json.dumps(data_json))
+
+            st.success("✅ Peta berjaya diproses!")
+            
+            st.download_button(
+                label="📥 Muat Turun Peta Penuh (Format HTML)",
+                data=html_content,
+                file_name="Peta_Animasi_Denggi_Terkini.html",
+                mime="text/html"
+            )
+
+            # Map Preview
+            st.components.v1.html(html_content, height=750, scrolling=True)
+
+            st.markdown("---")
+            
+            # -------------------------------------------------------------
+            # NEW ADDITION: FIXED HEATMAP TABLE (Blok vs Tingkat)
+            # -------------------------------------------------------------
+            st.markdown("### 🏢 Taburan Kes Mengikut Blok dan Tingkat")
+            st.markdown("Sila pilih lajur yang mengandungi maklumat Blok dan Tingkat. Jika maklumat ini wujud, jadual heatmap akan dijana secara automatik.")
+            
+            col1, col2 = st.columns(2)
+            all_columns = ["Tiada"] + list(df.columns)
+            
+            # Try to auto-guess the column names if they exist
+            default_blok = all_columns.index("Blok") if "Blok" in all_columns else 0
+            default_tingkat = all_columns.index("Tingkat") if "Tingkat" in all_columns else 0
+            
+            with col1:
+                col_blok = st.selectbox("Pilih lajur untuk **Blok**:", all_columns, index=default_blok)
+            with col2:
+                col_tingkat = st.selectbox("Pilih lajur untuk **Tingkat**:", all_columns, index=default_tingkat)
+
+            if col_blok != "Tiada" and col_tingkat != "Tiada":
                 # Create the crosstab table
                 cross_tab = pd.crosstab(df[col_tingkat], df[col_blok], margins=True, margins_name='JUMLAH')
                 
+                # Exclude 'JUMLAH' row and column from the coloring calculations
                 subset_rows = cross_tab.index[:-1]
                 subset_cols = cross_tab.columns[:-1]
                 
-                # Force global min and max calculations for the color scale
-                # This stops Streamlit from guessing and forces uniform colors across all blocks
-                data_subset = cross_tab.loc[subset_rows, subset_cols]
-                global_min = data_subset.values.min()
-                global_max = data_subset.values.max()
+                # Bulletproof method: Find the absolute max and min numbers mathematically
+                subset_data = cross_tab.loc[subset_rows, subset_cols]
+                global_max = subset_data.max().max()
+                global_min = subset_data.min().min()
                 
-                # Apply styling: background gradient and center text alignment
-                styled_table = (
-                    cross_tab.style
-                    .background_gradient(
-                        cmap='Reds', 
-                        axis=None,  
-                        subset=pd.IndexSlice[subset_rows, subset_cols],
-                        vmin=global_min,
-                        vmax=global_max
-                    )
-                    .set_properties(**{'text-align': 'center'}) # Centers the figures
-                )
+                # Apply styling: vmin and vmax force the table to completely obey the global highest/lowest
+                # set_properties(**{'text-align': 'center'}) centers all the text.
+                styled_table = cross_tab.style.background_gradient(
+                    cmap='Reds', 
+                    axis=None,
+                    vmin=global_min,
+                    vmax=global_max,
+                    subset=pd.IndexSlice[subset_rows, subset_cols] 
+                ).set_properties(**{'text-align': 'center'})
                 
                 st.dataframe(styled_table, use_container_width=True)
             else:
