@@ -2,12 +2,11 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import json
-import io
 
-st.set_page_config(page_title="Peta Garis Masa Denggi", layout="wide")
+st.set_page_config(page_title="Dashboard Analisis Denggi", layout="wide")
 
-st.title("🦟 Penjana Peta Interaktif Denggi")
-st.markdown("Muat naik fail data Excel mingguan anda untuk menjana peta animasi terkini.")
+st.title("🦟 Penjana Peta & Dashboard Interaktif Denggi")
+st.markdown("Muat naik fail data Excel mingguan anda untuk menjana peta animasi terkini serta jadual taburan kes.")
 
 # File uploader
 uploaded_file = st.file_uploader("Sila muat naik fail Excel (cth: HEAT MAP.xlsx)", type=['xlsx', 'xls'])
@@ -19,35 +18,34 @@ if uploaded_file is not None:
             xls = pd.ExcelFile(uploaded_file)
             df = pd.read_excel(uploaded_file, sheet_name=xls.sheet_names[0])
 
-            # Clean Data
+            # Clean Data for Map
             df['Latitud (ISO)'] = pd.to_numeric(df['Latitud (ISO)'], errors='coerce')
             df['Lngitud (ISO)'] = pd.to_numeric(df['Lngitud (ISO)'], errors='coerce')
-            df = df.dropna(subset=['Latitud (ISO)', 'Lngitud (ISO)'])
             
-            # Filter out coordinates that are clearly errors (outside Malaysia)
-            df = df[(df['Latitud (ISO)'] >= 1.0) & (df['Latitud (ISO)'] <= 7.0)]
-            df = df[(df['Lngitud (ISO)'] >= 99.0) & (df['Lngitud (ISO)'] <= 120.0)]
+            # Create a map-specific dataframe dropping missing coords
+            df_map = df.dropna(subset=['Latitud (ISO)', 'Lngitud (ISO)']).copy()
+            df_map = df_map[(df_map['Latitud (ISO)'] >= 1.0) & (df_map['Latitud (ISO)'] <= 7.0)]
+            df_map = df_map[(df_map['Lngitud (ISO)'] >= 99.0) & (df_map['Lngitud (ISO)'] <= 120.0)]
 
             # Handle missing values
-            df['Wabak Status'] = df['Wabak Status'].fillna('Tiada / Lain-lain')
-            df['Status Kewarganegaraan'] = df['Status Kewarganegaraan'].fillna('Tidak dinyatakan')
-            df['Lokaliti'] = df.get('Lokaliti (Alamat Semasa)', 'Tidak dinyatakan')
-            df['Jenis Kes'] = df.get('Jenis Kes', 'Tidak dinyatakan')
-            df['Epid Daftar'] = df.get('Epid Minggu (Tkh Daftar)', 'Tidak dinyatakan').astype(str)
-            df['Epid Onset'] = df.get('Epid Minggu (Tkh Onset)', 'Tidak dinyatakan').astype(str)
+            df_map['Wabak Status'] = df_map['Wabak Status'].fillna('Tiada / Lain-lain')
+            df_map['Status Kewarganegaraan'] = df_map['Status Kewarganegaraan'].fillna('Tidak dinyatakan')
+            df_map['Lokaliti'] = df_map.get('Lokaliti (Alamat Semasa)', 'Tidak dinyatakan')
+            df_map['Jenis Kes'] = df_map.get('Jenis Kes', 'Tidak dinyatakan')
+            df_map['Epid Daftar'] = df_map.get('Epid Minggu (Tkh Daftar)', 'Tidak dinyatakan').astype(str)
+            df_map['Epid Onset'] = df_map.get('Epid Minggu (Tkh Onset)', 'Tidak dinyatakan').astype(str)
 
             # Apply spatial jitter
             np.random.seed(42)
             jitter_amount = 0.0006 
-            df['Lat_Jitter'] = df['Latitud (ISO)'] + np.random.uniform(-jitter_amount, jitter_amount, len(df))
-            df['Lon_Jitter'] = df['Lngitud (ISO)'] + np.random.uniform(-jitter_amount, jitter_amount, len(df))
+            df_map['Lat_Jitter'] = df_map['Latitud (ISO)'] + np.random.uniform(-jitter_amount, jitter_amount, len(df_map))
+            df_map['Lon_Jitter'] = df_map['Lngitud (ISO)'] + np.random.uniform(-jitter_amount, jitter_amount, len(df_map))
 
             # Prepare Export Data
-            export_df = df[['Latitud (ISO)', 'Lngitud (ISO)', 'Lat_Jitter', 'Lon_Jitter', 
+            export_df = df_map[['Latitud (ISO)', 'Lngitud (ISO)', 'Lat_Jitter', 'Lon_Jitter', 
                             'Lokaliti', 'Jenis Kes', 'Epid Daftar', 'Epid Onset', 
                             'Wabak Status', 'Status Kewarganegaraan', 'Pihak Pentadbir Lokaliti']].copy()
             export_df.columns = ['lat', 'lon', 'lat_j', 'lon_j', 'lokaliti', 'jenis', 'epid_daftar', 'epid_onset', 'wabak', 'warga', 'pelaksana']
-
             export_df = export_df.fillna('N/A')
             data_json = export_df.to_dict(orient='records')
 
@@ -59,6 +57,7 @@ if uploaded_file is not None:
             def make_options(lst):
                 return "\n".join([f'<option value="{x}">{x}</option>' for x in lst])
 
+            # MAP HTML TEMPLATE
             html_template = """<!DOCTYPE html>
 <html>
 <head>
@@ -97,7 +96,7 @@ if uploaded_file is not None:
                 <input type="checkbox" id="loop-toggle">
                 <label for="loop-toggle" class="inline-label">🔁 Loop Berterusan</label>
             </div>
-            <div class="help-text">Gunakan slider untuk melihat pergerakan kes. Nilai <b>0</b> bermaksud kembali ke "Semua/Pelbagai" pilihan.</div>
+            <div class="help-text">Gunakan slider untuk melihat pergerakan kes.</div>
         </div>
         <div class="control-group">
             <label>Jenis Peta (Basemap)</label>
@@ -199,12 +198,8 @@ if uploaded_file is not None:
 
         function togglePlay() {
             const btn = document.getElementById('play-btn');
-            const loopEnabled = document.getElementById('loop-toggle').checked;
-            
             if (timer) {
-                clearInterval(timer); 
-                timer = null; 
-                btn.innerText = "▶ Play";
+                clearInterval(timer); timer = null; btn.innerText = "▶ Play";
             } else {
                 btn.innerText = "⏸ Pause";
                 if (parseInt(slider.value, 10) === parseInt(slider.max, 10) || parseInt(slider.value, 10) === 0) {
@@ -215,16 +210,12 @@ if uploaded_file is not None:
                 timer = setInterval(() => {
                     let v = parseInt(slider.value, 10);
                     if (v < parseInt(slider.max, 10)) { 
-                        slider.value = v + 1; 
-                        onSliderInput(); 
+                        slider.value = v + 1; onSliderInput(); 
                     } else {
                         if (document.getElementById('loop-toggle').checked) {
-                            slider.value = 1; // Restart seamlessly
-                            onSliderInput();
+                            slider.value = 1; onSliderInput();
                         } else {
-                            clearInterval(timer); 
-                            timer = null; 
-                            btn.innerText = "▶ Play"; 
+                            clearInterval(timer); timer = null; btn.innerText = "▶ Play"; 
                         }
                     }
                 }, 1000); 
@@ -325,17 +316,57 @@ if uploaded_file is not None:
             html_content = html_content.replace('__EPID__', make_options(epid_list))
             html_content = html_content.replace('__DATA__', json.dumps(data_json))
 
-            st.success("✅ Selesai diproses! Muat turun peta anda di bawah, atau pra-lihat di sini.")
+            st.success("✅ Peta berjaya diproses!")
             
             st.download_button(
-                label="📥 Muat Turun Peta Anda (Format HTML)",
+                label="📥 Muat Turun Peta Penuh (Format HTML)",
                 data=html_content,
                 file_name="Peta_Animasi_Denggi_Terkini.html",
                 mime="text/html"
             )
 
-            # Show a preview in the web browser
+            # Map Preview
             st.components.v1.html(html_content, height=750, scrolling=True)
+
+            st.markdown("---")
+            
+            # -------------------------------------------------------------
+            # NEW ADDITION: FIXED HEATMAP TABLE (Blok vs Tingkat)
+            # -------------------------------------------------------------
+            st.markdown("### 🏢 Taburan Kes Mengikut Blok dan Tingkat")
+            st.markdown("Sila pilih lajur yang mengandungi maklumat Blok dan Tingkat. Jika maklumat ini wujud, jadual heatmap akan dijana secara automatik.")
+            
+            col1, col2 = st.columns(2)
+            all_columns = ["Tiada"] + list(df.columns)
+            
+            # Try to auto-guess the column names if they exist
+            default_blok = all_columns.index("Blok") if "Blok" in all_columns else 0
+            default_tingkat = all_columns.index("Tingkat") if "Tingkat" in all_columns else 0
+            
+            with col1:
+                col_blok = st.selectbox("Pilih lajur untuk **Blok**:", all_columns, index=default_blok)
+            with col2:
+                col_tingkat = st.selectbox("Pilih lajur untuk **Tingkat**:", all_columns, index=default_tingkat)
+
+            if col_blok != "Tiada" and col_tingkat != "Tiada":
+                # Create the crosstab table
+                cross_tab = pd.crosstab(df[col_tingkat], df[col_blok], margins=True, margins_name='JUMLAH')
+                
+                # To prevent the 'JUMLAH' row/column from absorbing all the dark red color,
+                # we explicitly apply the background gradient ONLY to the core dataset subset.
+                subset_rows = cross_tab.index[:-1]
+                subset_cols = cross_tab.columns[:-1]
+                
+                # Apply styling: axis=None makes it perfectly scaled across ALL cells.
+                styled_table = cross_tab.style.background_gradient(
+                    cmap='Reds', 
+                    axis=None,  
+                    subset=pd.IndexSlice[subset_rows, subset_cols] 
+                )
+                
+                st.dataframe(styled_table, use_container_width=True)
+            else:
+                st.info("Pilih lajur Blok dan Tingkat dari data Excel anda untuk melihat jadual ini.")
 
         except Exception as e:
             st.error(f"Terdapat ralat semasa membaca fail: {e}")
