@@ -331,10 +331,10 @@ if uploaded_file is not None:
             st.markdown("---")
             
             # -------------------------------------------------------------
-            # NEW ADDITION: FIXED HEATMAP TABLE (Blok vs Tingkat)
+            # NEW ADDITION: PERFECTED HEATMAP TABLE (Blok vs Tingkat)
             # -------------------------------------------------------------
             st.markdown("### 🏢 Taburan Kes Mengikut Blok dan Tingkat")
-            st.markdown("Sila pilih lajur yang mengandungi maklumat Blok dan Tingkat. Jika maklumat ini wujud, jadual heatmap akan dijana secara automatik.")
+            st.markdown("Sila pilih lajur yang mengandungi maklumat Blok dan Tingkat.")
             
             col1, col2 = st.columns(2)
             all_columns = ["Tiada"] + list(df.columns)
@@ -352,19 +352,31 @@ if uploaded_file is not None:
                 # Create the crosstab table
                 cross_tab = pd.crosstab(df[col_tingkat], df[col_blok], margins=True, margins_name='JUMLAH')
                 
-                # To prevent the 'JUMLAH' row/column from absorbing all the dark red color,
-                # we explicitly apply the background gradient ONLY to the core dataset subset.
+                # Get the core data excluding 'JUMLAH' margins
                 subset_rows = cross_tab.index[:-1]
                 subset_cols = cross_tab.columns[:-1]
                 
-                # Apply styling: axis=None makes it perfectly scaled across ALL cells.
+                # EXPLICITLY grab the global minimum and maximum values to forcefully set the color scale 
+                v_min = cross_tab.loc[subset_rows, subset_cols].values.min()
+                v_max = cross_tab.loc[subset_rows, subset_cols].values.max()
+                
+                # Apply styling: explicitly define vmin and vmax, and add center alignment
                 styled_table = cross_tab.style.background_gradient(
                     cmap='Reds', 
-                    axis=None,  
+                    axis=None,
+                    vmin=v_min,
+                    vmax=v_max,
                     subset=pd.IndexSlice[subset_rows, subset_cols] 
-                )
+                ).set_properties(**{
+                    'text-align': 'center'
+                }).set_table_styles([
+                    dict(selector='th', props=[('text-align', 'center')]),
+                    dict(selector='td', props=[('text-align', 'center')])
+                ])
                 
-                st.dataframe(styled_table, use_container_width=True)
+                # Render using st.table for guaranteed perfect CSS alignment & styling
+                st.table(styled_table)
+                
             else:
                 st.info("Pilih lajur Blok dan Tingkat dari data Excel anda untuk melihat jadual ini.")
 
