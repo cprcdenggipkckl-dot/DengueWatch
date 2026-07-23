@@ -4,10 +4,10 @@ import numpy as np
 import json
 import io
 
-st.set_page_config(page_title="Peta Garis Masa Denggi", layout="wide")
+st.set_page_config(page_title="Dashboard Analisis Denggi", layout="wide")
 
-st.title("🦟 Penjana Peta Interaktif Denggi")
-st.markdown("Muat naik fail data Excel mingguan anda untuk menjana peta animasi terkini.")
+st.title("🦟 Penjana Peta & Dashboard Interaktif Denggi")
+st.markdown("Muat naik fail data Excel mingguan anda untuk menjana peta animasi terkini serta jadual taburan kes.")
 
 # File uploader
 uploaded_file = st.file_uploader("Sila muat naik fail Excel (cth: HEAT MAP.xlsx)", type=['xlsx', 'xls'])
@@ -199,8 +199,6 @@ if uploaded_file is not None:
 
         function togglePlay() {
             const btn = document.getElementById('play-btn');
-            const loopEnabled = document.getElementById('loop-toggle').checked;
-            
             if (timer) {
                 clearInterval(timer); timer = null; btn.innerText = "▶ Play";
             } else {
@@ -334,7 +332,9 @@ if uploaded_file is not None:
             st.markdown("---")
             
             # -------------------------------------------------------------
-            # NEW ADDITION: FIXED HEATMAP TABLE (Blok vs Tingkat)
+            # FIXED HEATMAP TABLE (Blok vs Tingkat)
+            # - Forces explicitly calculated global min/max for true colors
+            # - Centers all figures
             # -------------------------------------------------------------
             st.markdown("### 🏢 Taburan Kes Mengikut Blok dan Tingkat")
             st.markdown("Sila pilih lajur yang mengandungi maklumat Blok dan Tingkat. Jika maklumat ini wujud, jadual heatmap akan dijana secara automatik.")
@@ -342,7 +342,6 @@ if uploaded_file is not None:
             col1, col2 = st.columns(2)
             all_columns = ["Tiada"] + list(df.columns)
             
-            # Try to auto-guess the column names if they exist
             default_blok = all_columns.index("Blok") if "Blok" in all_columns else 0
             default_tingkat = all_columns.index("Tingkat") if "Tingkat" in all_columns else 0
             
@@ -352,27 +351,32 @@ if uploaded_file is not None:
                 col_tingkat = st.selectbox("Pilih lajur untuk **Tingkat**:", all_columns, index=default_tingkat)
 
             if col_blok != "Tiada" and col_tingkat != "Tiada":
-                # Create the crosstab table
                 cross_tab = pd.crosstab(df[col_tingkat], df[col_blok], margins=True, margins_name='JUMLAH')
                 
-                # Exclude 'JUMLAH' row and column from the coloring calculations
                 subset_rows = cross_tab.index[:-1]
                 subset_cols = cross_tab.columns[:-1]
                 
-                # Bulletproof method: Find the absolute max and min numbers mathematically
-                subset_data = cross_tab.loc[subset_rows, subset_cols]
-                global_max = subset_data.max().max()
-                global_min = subset_data.min().min()
+                # Expliclty extract global min/max across the specific internal cells
+                core_data = cross_tab.loc[subset_rows, subset_cols].values
+                val_min = core_data.min()
+                val_max = core_data.max()
                 
-                # Apply styling: vmin and vmax force the table to completely obey the global highest/lowest
-                # set_properties(**{'text-align': 'center'}) centers all the text.
-                styled_table = cross_tab.style.background_gradient(
-                    cmap='Reds', 
-                    axis=None,
-                    vmin=global_min,
-                    vmax=global_max,
-                    subset=pd.IndexSlice[subset_rows, subset_cols] 
-                ).set_properties(**{'text-align': 'center'})
+                # Apply styling: force vmin/vmax to guarantee global scale 
+                # Add text-align center to place figures exactly in the middle of cells
+                styled_table = (
+                    cross_tab.style
+                    .background_gradient(
+                        cmap='Reds', 
+                        axis=None, 
+                        vmin=val_min, 
+                        vmax=val_max, 
+                        subset=(subset_rows, subset_cols)
+                    )
+                    .set_properties(**{'text-align': 'center'})
+                    .set_table_styles([
+                        dict(selector='th', props=[('text-align', 'center')])
+                    ])
+                )
                 
                 st.dataframe(styled_table, use_container_width=True)
             else:
