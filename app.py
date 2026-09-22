@@ -102,9 +102,9 @@ if uploaded_file is not None:
         <div class="control-group">
             <label>Jenis Peta (Basemap)</label>
             <select id="map-style" onchange="updateMap()">
-                <option value="carto-positron" selected>Carto Positron (Peta Cerah)</option>
+                <option value="esri-light" selected>Peta Cerah (Tanpa API Key)</option>
                 <option value="open-street-map">OpenStreetMap (Terperinci)</option>
-                <option value="carto-darkmatter">Carto Darkmatter (Peta Gelap)</option>
+                <option value="esri-dark">Peta Gelap (Tanpa API Key)</option>
             </select>
         </div>
         <div class="control-group">
@@ -293,12 +293,31 @@ if uploaded_file is not None:
             const traces = [];
             traces.push({ type: 'densitymapbox', lat: lats, lon: lons, z: Array(lats.length).fill(1), radius: 18, customdata: customdata, hovertemplate: hovertemplate, name: 'Heatmap', visible: visualMode === 'heatmap' });
             
-            let dotColor = mapStyle === 'carto-darkmatter' ? 'rgba(255, 255, 255, 0.8)' : 'rgba(20, 20, 20, 0.7)';
-            let dotLine = mapStyle === 'carto-darkmatter' ? 'black' : 'white';
+            let dotColor = mapStyle === 'esri-dark' ? 'rgba(255, 255, 255, 0.8)' : 'rgba(20, 20, 20, 0.7)';
+            let dotLine = mapStyle === 'esri-dark' ? 'black' : 'white';
 
             traces.push({ type: 'scattermapbox', mode: 'markers', lat: lats_j, lon: lons_j, marker: { size: 8, color: dotColor, line: {color: dotLine, width: 1} }, customdata: customdata, hovertemplate: hovertemplate, name: 'Kes Individu', visible: visualMode !== 'heatmap' });
 
             const layers = [];
+            
+            // 1. ADD CUSTOM FREE BASEMAP RASTER LAYERS AT THE BOTTOM
+            if (mapStyle === 'esri-light') {
+                layers.push({
+                    sourcetype: 'raster',
+                    source: ['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}'],
+                    type: 'raster',
+                    below: 'traces'
+                });
+            } else if (mapStyle === 'esri-dark') {
+                layers.push({
+                    sourcetype: 'raster',
+                    source: ['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'],
+                    type: 'raster',
+                    below: 'traces'
+                });
+            }
+
+            // 2. ADD TRUE RADIUS GEOJSON LAYERS
             if (visualMode === 'dots_400' || visualMode === 'dots_both') {
                 layers.push({ sourcetype: 'geojson', source: createGeoJsonCircles(filteredData, 400), type: 'fill', color: 'rgba(135, 206, 250, 0.15)' });
                 layers.push({ sourcetype: 'geojson', source: createGeoJsonCircles(filteredData, 400), type: 'line', color: 'rgba(135, 206, 250, 0.8)', line: {width: 1} });
@@ -308,7 +327,10 @@ if uploaded_file is not None:
                 layers.push({ sourcetype: 'geojson', source: createGeoJsonCircles(filteredData, 200), type: 'line', color: 'rgba(255, 69, 0, 0.8)', line: {width: 1} });
             }
 
-            const layout = { title: titleText, mapbox: { style: mapStyle, center: {lat: avgLat, lon: avgLon}, zoom: 12.5, layers: layers }, margin: {r: 0, t: 40, l: 0, b: 0}, showlegend: false, uirevision: 'true' };
+            // Determine base Plotly style (if using our custom ESRI rasters, default back to white-bg to prevent loading anything else)
+            const mapboxStyle = mapStyle === 'open-street-map' ? 'open-street-map' : 'white-bg';
+
+            const layout = { title: titleText, mapbox: { style: mapboxStyle, center: {lat: avgLat, lon: avgLon}, zoom: 12.5, layers: layers }, margin: {r: 0, t: 40, l: 0, b: 0}, showlegend: false, uirevision: 'true' };
 
             if (!mapInitialized) { Plotly.newPlot('map', traces, layout); mapInitialized = true; } 
             else { Plotly.react('map', traces, layout); }
