@@ -102,9 +102,9 @@ if uploaded_file is not None:
         <div class="control-group">
             <label>Jenis Peta (Basemap)</label>
             <select id="map-style" onchange="updateMap()">
-                <option value="esri-light" selected>Peta Cerah (Tanpa API Key)</option>
+                <option value="esri-light" selected>Peta Cerah</option>
                 <option value="open-street-map">OpenStreetMap (Terperinci)</option>
-                <option value="esri-dark">Peta Gelap (Tanpa API Key)</option>
+                <option value="esri-dark">Peta Gelap</option>
             </select>
         </div>
         <div class="control-group">
@@ -327,7 +327,7 @@ if uploaded_file is not None:
                 layers.push({ sourcetype: 'geojson', source: createGeoJsonCircles(filteredData, 200), type: 'line', color: 'rgba(255, 69, 0, 0.8)', line: {width: 1} });
             }
 
-            // Determine base Plotly style (if using our custom ESRI rasters, default back to white-bg to prevent loading anything else)
+            // Determine base Plotly style
             const mapboxStyle = mapStyle === 'open-street-map' ? 'open-street-map' : 'white-bg';
 
             const layout = { title: titleText, mapbox: { style: mapboxStyle, center: {lat: avgLat, lon: avgLon}, zoom: 12.5, layers: layers }, margin: {r: 0, t: 40, l: 0, b: 0}, showlegend: false, uirevision: 'true' };
